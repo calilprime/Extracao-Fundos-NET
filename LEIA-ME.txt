@@ -1,0 +1,65 @@
+========================================================================
+  EXTRAÇÃO FIDC · FNET — Netz Asset
+  Guia rápido de instalação e uso
+========================================================================
+
+O QUE É
+-------
+Ferramenta que lê os Informes Mensais de um FIDC direto da API pública do
+FNET (B3) e preenche a aba "ANÁLISE FIDC" do excel de análise —
+sem navegador, sem PDF, sem impressão.
+
+Uso pela INTERFACE (app web local): basta o fnet_app.py.
+
+------------------------------------------------------------------------
+INSTALAÇÃO (só na primeira vez, em cada máquina)
+------------------------------------------------------------------------
+1) Instale o Python 3.8 ou superior:   https://www.python.org/downloads/
+   (No instalador, marque "Add Python to PATH".)
+
+2) Instale a única dependência, abrindo o Prompt de Comando e rodando:
+
+       pip install openpyxl
+
+------------------------------------------------------------------------
+COMO USAR A INTERFACE
+------------------------------------------------------------------------
+- Dê um duplo-clique em  "Abrir Extração FIDC.bat"
+  (ou rode  python fnet_app.py  no Prompt de Comando, dentro desta pasta).
+
+- O navegador abre sozinho com o formulário. Preencha:
+    • Nome OU CNPJ do fundo  (escolha o modo no botão Nome / CNPJ).
+      → O CNPJ é mais preciso: retorna exatamente 1 fundo. Pode digitar
+        com ou sem pontuação (23.216.398/0001-01 ou 23216398000101).
+    • Planilha (.xlsx)  → botão "Procurar…" abre o explorador de arquivos.
+    • Aba do excel  → Ex:"ANÁLISE FIDC".
+    • Últimos meses  → quantas colunas de mês (mais recentes) considerar.
+                       Use 0 para todas.
+    • Sobrescrever  → desligado (recomendado): preenche só o que está em
+                      branco. Ligado: reescreve todos os meses com informe.
+    • Backup  → ligado: cria uma cópia da planilha (com data/hora) antes
+                de gravar.
+
+- Clique em "Extrair e preencher" e acompanhe o progresso no console.
+  Ao terminar, abra a planilha no Excel — as fórmulas recalculam sozinhas.
+
+- Para encerrar o programa: feche a janela preta (Prompt) que ficou aberta.
+
+------------------------------------------------------------------------
+ARQUIVOS DESTA PASTA
+------------------------------------------------------------------------
+  fnet_app.py .................... a interface (app web local) + toda a lógica
+  Abrir Extração FIDC.bat ........ atalho de duplo-clique para abrir a interface
+  Modelo_Multiplica...xlsx ....... a planilha de análise (modelo)
+  LEIA-ME.txt .................... este guia
+
+------------------------------------------------------------------------
+OBSERVAÇÕES
+------------------------------------------------------------------------
+- Tudo roda no seu computador. O único acesso à internet é a API pública
+  do FNET. A planilha é gravada localmente.
+- O FNET fica atrás do Cloudflare e às vezes devolve erro 500/520. O
+  programa já tenta de novo automaticamente; se falhar, rode outra vez.
+- A planilha precisa ter as datas no cabeçalho (linha 18) OU o "Mês da
+  Análise" preenchido (célula H12) para o programa mapear os meses.
+========================================================================
