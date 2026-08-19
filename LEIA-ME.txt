@@ -54,6 +54,48 @@ ARQUIVOS DESTA PASTA
   LEIA-ME.txt .................... este guia
 
 ------------------------------------------------------------------------
+COMO O PROGRAMA IDENTIFICA A COTA SUBORDINADA
+------------------------------------------------------------------------
+O nome da classe no informe NÃO é confiável. Os administradores usaram
+nomenclaturas diferentes ao longo do tempo, e a Resolução CVM 175
+reorganizou classes/subclasses em 2024, quebrando o padrão de quase todos
+os fundos. Casos reais já encontrados na pasta Ouro Preto:
+
+  • "Cota Junior", "Cota Unica", "Única", "Subordonada" (com erro de
+    digitação) em vez de "Subordinada";
+  • a cota MEZANINO rotulada como "Subordinada 1", e a subordinada real
+    como "Subordinada 2" (ADAMANTUS e MONARCA até abr/2024);
+  • a posição da subordinada declarada no nó "Sênior" do XML, com o nó
+    "Subordinada" zerado (SUPER RENDA, out/2023 a set/2024);
+  • as três classes rotacionadas entre si num único mês, com a
+    subordinada real saindo como "Mezanino 1" (HB CAPITAL, set/2025).
+
+Por isso o programa NÃO decide pelo nome. Ele baixa todos os meses da
+janela e identifica a subordinada pela CONTINUIDADE da série — o mesmo
+raciocínio da conferência manual:
+
+  • o valor da cota muda só pela rentabilidade (aporte e resgate não
+    mexem no valor unitário, só na quantidade);
+  • a quantidade de cotas muda só por aporte/resgate;
+  • o valor total (quantidade x valor da cota) acompanha os dois.
+
+Uma variação brusca só é aceita se aporte/resgate a justificarem. A
+escolha é feita para a série INTEIRA de uma vez (não mês a mês), então um
+mês com rótulo trocado é corrigido pelos vizinhos.
+
+No console, dois avisos merecem atenção:
+  • "Classe corrigida pela continuidade da série" — o rótulo do informe
+    apontava outra classe; o programa usou a que a série confirma.
+    É informativo, não é erro.
+  • "Conferir manualmente — variação brusca sem justificativa" — sobrou
+    uma descontinuidade que nem aporte nem resgate explicam. Vale abrir
+    esse mês no FNET e conferir.
+
+Como a identificação compara os meses entre si, o programa baixa toda a
+janela escolhida mesmo quando só alguns meses serão gravados. Com 36
+meses isso leva algo entre 30 e 60 segundos.
+
+------------------------------------------------------------------------
 OBSERVAÇÕES
 ------------------------------------------------------------------------
 - Tudo roda no seu computador. O único acesso à internet é a API pública
@@ -62,4 +104,10 @@ OBSERVAÇÕES
   programa já tenta de novo automaticamente; se falhar, rode outra vez.
 - A planilha precisa ter as datas no cabeçalho (linha 18) OU o "Mês da
   Análise" preenchido (célula H12) para o programa mapear os meses.
+- Informes anteriores a out/2023 usam um formato antigo de XML que não
+  traz a descrição das classes. Esses meses são reportados como falha e
+  NÃO são gravados (em vez de gravar zero). Todos os meses de 2024 em
+  diante estão no formato novo.
+- Um mês já preenchido com ZERO conta como preenchido. Para reprocessar
+  meses que ficaram zerados por engano, ligue "Sobrescrever".
 ========================================================================

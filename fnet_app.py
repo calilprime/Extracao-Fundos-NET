@@ -189,59 +189,68 @@ _BUCKETS_90 = ["VL_INAD_VENC_91_120", "VL_INAD_VENC_121_150", "VL_INAD_VENC_151_
                "VL_INAD_VENC_1080"]
 
 
-def _eh_subordinada(tipo, serie):
-    """Reconhece a classe subordinada em qualquer formato que o FNET usou ao longo do tempo:
-      - TIPO "Cota Subordinada", "Subordinada 1"…            (palavra completa no TIPO)
-      - TIPO "Sub" + SERIE "Subordinada 1"/"Subordinada 2"   (abreviação; a palavra vai no SERIE)
-    Exclui explicitamente os mezaninos ("Cota Mezanino", "Mezanino 1", "Mez"…)."""
-    txt = f"{tipo or ''} {serie or ''}".strip().lower()
+def _sem_acento(s):
+    for de, para in (("á", "a"), ("â", "a"), ("ã", "a"), ("à", "a"),
+                     ("é", "e"), ("ê", "e"), ("í", "i"), ("ó", "o"),
+                     ("ô", "o"), ("õ", "o"), ("ú", "u"), ("ç", "c")):
+        s = s.replace(de, para)
+    return s
+
+
+def classificar_classe(no, tipo, serie):
+    """Classifica o rótulo de UMA classe em: MEZANINO, SUBORDINADA, UNICA, SENIOR, OUTRO.
+
+    Os administradores usaram nomes muito diferentes ao longo do tempo — e a
+    Resolução CVM 175 reorganizou classes/subclasses em 2024, quebrando a
+    nomenclatura de praticamente todos os fundos. Exemplos reais já vistos:
+      "Cota Subordinada", "Subordinada 1", "Cota Junior", "Cota Unica",
+      "Subordonada" (com erro de digitação), "Única", "Sub | Subordinada 2".
+    Por isso o rótulo é apenas um INDÍCIO: a decisão final de qual classe é a
+    subordinada é tomada em escolher_serie_coerente(), pela continuidade da
+    série ao longo dos meses."""
+    txt = _sem_acento(f"{tipo or ''} {serie or ''}".strip().lower())
     if "mezan" in txt or "mezz" in txt:
-        return False
-    if "subord" in txt:
-        return True
-    return (tipo or "").strip().lower() == "sub"   # abreviação usada em alguns informes
+        return "MEZANINO"
+    if no == "SENIOR":
+        # o nó XML já diz "sênior"; só um rótulo explícito de subordinada o contradiz
+        return "SUBORDINADA" if ("subord" in txt or "junior" in txt) else "SENIOR"
+    if "subord" in txt or "junior" in txt or (tipo or "").strip().lower() == "sub":
+        return "SUBORDINADA"
+    if "unica" in txt or "unico" in txt:
+        return "UNICA"
+    return "OUTRO"
+
+
+def _eh_subordinada(tipo, serie):
+    """Mantida por compatibilidade: reconhece pelo rótulo, num mês isolado."""
+    return classificar_classe("SUBORD", tipo, serie) == "SUBORDINADA"
 
 
 def escolher_subordinada(classes):
-    """Regra: classe subordinada (ignora Mezanino); a primeira com valor != 0
-    (ou a primeira subordinada, se todas forem zero)."""
+    """Regra só por rótulo, para um mês isolado (usada por parse_informe).
+    A seleção boa é a de escolher_serie_coerente(), que olha a série inteira."""
     subs = [c for c in classes if _eh_subordinada(c["TIPO"], c["SERIE"])]
     for c in subs:
         if c["valor"] != 0:
             return c["TIPO"], c["SERIE"]
-    return (subs[0]["TIPO"], subs[0]["SERIE"]) if subs else (None, None)
+    if subs:
+        return subs[0]["TIPO"], subs[0]["SERIE"]
+    nao_mez = [c for c in classes
+               if classificar_classe("SUBORD", c["TIPO"], c["SERIE"]) != "MEZANINO"]
+    if len(nao_mez) == 1:
+        return nao_mez[0]["TIPO"], nao_mez[0]["SERIE"]
+    return (None, None)
 
 
-def parse_informe(xml_bytes):
+def extrair_mes(xml_bytes):
+    """Lê um Informe Mensal e devolve TODAS as classes declaradas (dos nós
+    SENIOR e SUBORD), com quantidade, valor da cota, aporte e resgate de cada
+    uma, mais os campos que não dependem da classe escolhida (PL, inadimplência…).
+
+    Não decide qual classe é a subordinada — isso é papel de
+    escolher_serie_coerente(), que compara os meses entre si."""
     root = ET.fromstring(xml_bytes)
     d = {"competencia": _t(root.find("CAB_INFORM"), "DT_COMPT")}
-
-    dsc = root.find(".//OUTRAS_INFORM/DESC_SERIE_CLASSE")
-    classes = [{"TIPO": _t(c, "TIPO"), "SERIE": _t(c, "SERIE"), "valor": _f(c, "VL_COTAS")}
-               for c in dsc.findall("DESC_SERIE_CLASSE_SUBORD")]
-    tipo_sel, serie_sel = escolher_subordinada(classes)
-    d["sub_tipo"], d["sub_serie"] = tipo_sel, serie_sel
-
-    def achar(parent, filho):
-        if parent is None:
-            return None
-        nodes = parent.findall(filho)
-        # 1) match exato por (TIPO, SERIE)
-        for c in nodes:
-            if _t(c, "TIPO") == tipo_sel and _t(c, "SERIE") == serie_sel:
-                return c
-        # 2) nó subordinado agregado, sem TIPO/SERIE (ex.: CAPT_MES em alguns informes)
-        for c in nodes:
-            if not _t(c, "TIPO") and not _t(c, "SERIE"):
-                return c
-        # 3) fallback: único nó disponível
-        return nodes[0] if len(nodes) == 1 else None
-
-    csel = achar(dsc, "DESC_SERIE_CLASSE_SUBORD")
-    d["sub_qtd"] = _f(csel, "QT_COTAS")
-    d["sub_valor"] = _f(csel, "VL_COTAS")
-    d["aporte"] = _f(achar(root.find(".//CAPTA_RESGA_AMORTI/CAPT_MES"), "CLASSE_SUBORD"), "VL_TOTAL")
-    d["resgate"] = _f(achar(root.find(".//CAPTA_RESGA_AMORTI/RESG_MES"), "CLASSE_SUBORD"), "VL_TOTAL")
 
     d["pl"] = _f(root.find(".//PATRLIQ"), "VL_PATRIM_LIQ")
     aquis = root.find(".//COMPMT_DICRED_AQUIS")
@@ -249,6 +258,239 @@ def parse_informe(xml_bytes):
     d["inadimplentes"] = _f(aquis, "VL_SOM_INAD_VENC") + _f(sem, "VL_SOM_INAD_VENC")
     d["inad_over90"] = sum(_f(aquis, b) for b in _BUCKETS_90) + sum(_f(sem, b) for b in _BUCKETS_90)
     d["recompras"] = _f(root.find(".//NEGOC_DICRED_MES/DICRED_MES_ALIEN_RECOMP"), "VL_DICRED_ALIEN")
+
+    def filhos(bloco):
+        no = root.find(f".//CAPTA_RESGA_AMORTI/{bloco}")
+        return list(no) if no is not None else []
+
+    capt, resg = filhos("CAPT_MES"), filhos("RESG_MES")
+
+    def fluxo(nodes, tag, tipo, serie, n_cands):
+        """Captação/resgate do mês para a classe (tipo, serie).
+        Devolve (valor, agregado). agregado=True quando o informe traz um único
+        nó para todas as subclasses e não há como separar por classe — aí o
+        valor é o TOTAL do nó, não o da classe."""
+        iguais = [c for c in nodes if c.tag == tag]
+        for c in iguais:                       # 1) match exato por (TIPO, SERIE)
+            if _t(c, "TIPO") == tipo and _t(c, "SERIE") == serie:
+                return _f(c, "VL_TOTAL"), False
+        for c in iguais:                       # 2) nó agregado, sem TIPO/SERIE
+            if not _t(c, "TIPO") and not _t(c, "SERIE"):
+                return _f(c, "VL_TOTAL"), n_cands > 1
+        if len(iguais) == 1 and n_cands == 1:   # 3) nó único e classe única: sem ambiguidade
+            return _f(iguais[0], "VL_TOTAL"), False
+        # 4) o informe atribuiu o fluxo a OUTRA classe (por TIPO/SERIE): esta não teve fluxo.
+        #    Importante não cair aqui em "usa o único nó": em MONARCA dez/23 o
+        #    RESG_MES traz só 'Sub/Subordinada 1' (o mezanino) com R$ 2,7 mi, e
+        #    atribuir isso também à subordinada real distorce tudo.
+        return 0.0, False
+
+    dsc = root.find(".//OUTRAS_INFORM/DESC_SERIE_CLASSE")
+    cands = []
+    for filho in (list(dsc) if dsc is not None else []):
+        no = filho.tag.replace("DESC_SERIE_CLASSE_", "")
+        if no not in ("SENIOR", "SUBORD"):
+            continue
+        tipo, serie = _t(filho, "TIPO"), _t(filho, "SERIE")
+        cands.append({
+            "no": no, "TIPO": tipo, "SERIE": serie,
+            "qtd": _f(filho, "QT_COTAS"), "valor": _f(filho, "VL_COTAS"),
+            "classe": classificar_classe(no, tipo, serie),
+        })
+
+    n_no = {"SENIOR": sum(1 for c in cands if c["no"] == "SENIOR"),
+            "SUBORD": sum(1 for c in cands if c["no"] == "SUBORD")}
+    for c in cands:
+        tag = "CLASSE_SENIOR" if c["no"] == "SENIOR" else "CLASSE_SUBORD"
+        c["aporte"], ap_ag = fluxo(capt, tag, c["TIPO"], c["SERIE"], n_no[c["no"]])
+        c["resgate"], rg_ag = fluxo(resg, tag, c["TIPO"], c["SERIE"], n_no[c["no"]])
+        c["fluxo_agregado"] = ap_ag or rg_ag
+
+    d["candidatos"] = cands
+    return d
+
+
+# ============================================================================
+#  2.1  Identificação COERENTE da subordinada ao longo dos meses
+# ============================================================================
+# O rótulo da classe no informe não é confiável (ver classificar_classe).
+# Já a identidade econômica da classe é: ela persiste mês a mês. Usamos três
+# invariantes independentes para reconhecer "a mesma classe" em dois meses:
+#
+#   • valor da cota  — muda só pela rentabilidade do mês. Aporte e resgate NÃO
+#                      mexem no valor unitário, só na quantidade.
+#   • quantidade     — muda só por aporte/resgate: qtd_nova ≈ qtd + fluxo/valor.
+#   • valor total    — quantidade × valor da cota, ajustado pelo fluxo do mês.
+#
+# Basta UM desses casar bem para a identidade estar estabelecida (por isso o
+# erro combinado pesa sobretudo o melhor dos três): quando um administrador
+# reagrupa cotas (desdobramento), quantidade e valor unitário mudam juntos mas
+# o valor total continua — e vice-versa.
+#
+# A escolha final é o caminho de MENOR CUSTO ao longo de todos os meses
+# (Viterbi), somando o custo de rótulo de cada classe com o custo de
+# descontinuidade entre meses consecutivos. Isso é justamente o que se faz a
+# olho na planilha: conferir se quantidade e valor da cota fazem sentido com os
+# aportes e resgates, e desconfiar de salto brusco sem justificativa.
+#
+# Calibração dos custos — a propriedade que se quer garantir:
+#   Um mês ISOLADO com rótulo trocado pode ser corrigido pela continuidade
+#   (corrigi-lo economiza a descontinuidade na entrada E na saída, ~2x
+#   PESO_CONTINUIDADE), mas uma sequência LONGA não pode derivar para a classe
+#   errada (cada mês a mais custa o rótulo inteiro e economiza no máximo
+#   ~1x PESO_CONTINUIDADE). Daí PESO_CONTINUIDADE < CUSTO(MEZANINO) < 2x.
+#   Caso real que exige isso: HB CAPITAL set/2025, em que o administrador
+#   rotacionou as três classes e a subordinada real saiu como "Mezanino 1".
+CUSTO_ROTULO = {"SUBORDINADA": 0.0, "UNICA": 0.15, "OUTRO": 0.6,
+                "SENIOR": 20.0, "MEZANINO": 6.0}
+CUSTO_ZERADA = 5.0            # classe zerada: perde de um mezanino, mas ganha se não houver mais nada
+CUSTO_SENIOR_MONO = 0.3       # fundo mono-classe: o nó SENIOR/SUBORD não é confiável
+CUSTO_SENIOR_SO_ELE = 1.5     # no mês, o nó SUBORD está todo zerado e o SENIOR não
+PESO_CONTINUIDADE = 4.0       # peso da descontinuidade frente ao custo de rótulo
+ERRO_MAX = 3.0                # satura o erro: um mês esquisito não domina o caminho
+ERRO_ALERTA = 0.60            # acima disso, avisa "salto sem justificativa"
+
+
+def _erro_continuidade(a, b, gap=1):
+    """Erro normalizado (0 = continuação perfeita) entre a classe escolhida no
+    mês anterior (a) e um candidato do mês atual (b). Ver comentário acima."""
+    eps = 1e-9
+    qa, va, qb, vb = a["qtd"], a["valor"], b["qtd"], b["valor"]
+
+    zer_a = not qa and not va
+    zer_b = not qb and not vb
+    if zer_a and zer_b:
+        return 0.0
+    if zer_a or zer_b:
+        return 0.5            # classe começou ou encerrou: nem confirma nem desmente
+
+    err_v = abs(vb - va) / max(abs(va), abs(vb), eps)
+
+    ta, tb = qa * va, qb * vb
+    v_ref = ((va + vb) / 2.0) or eps
+
+    # O fluxo do mês não é sempre atribuível à classe: há informes com um único
+    # nó de captação/resgate para todas as subclasses, e outros que declaram o
+    # fluxo só de uma delas. Por isso medimos os dois cenários — com e sem o
+    # fluxo — e ficamos com o mais favorável: a variação está justificada SE os
+    # aportes/resgates a explicam OU se simplesmente não houve variação. Um
+    # salto que nenhuma das duas leituras explica continua caro, que é
+    # exatamente o critério usado na conferência manual.
+    err_q = err_t = None
+    for f in (b["aporte"] - b["resgate"], 0.0):
+        eq = abs(qb - (qa + f / v_ref)) / max(abs(qa), abs(qb), eps)
+        et = abs(tb - (ta + f)) / max(abs(ta), abs(tb), eps)
+        err_q = eq if err_q is None else min(err_q, eq)
+        err_t = et if err_t is None else min(err_t, et)
+
+    e = sorted((err_v, err_q, err_t))
+    return (0.65 * e[0] + 0.35 * e[1]) / (max(gap, 1) ** 0.5)
+
+
+def _custo_rotulo(cand, subord_zerado, mono_classe):
+    c = CUSTO_ROTULO.get(cand["classe"], 0.6)
+    if cand["classe"] == "SENIOR":
+        if mono_classe:
+            c = CUSTO_SENIOR_MONO
+        elif subord_zerado and (cand["qtd"] or cand["valor"]):
+            c = CUSTO_SENIOR_SO_ELE
+    if not cand["qtd"] and not cand["valor"]:
+        c += CUSTO_ZERADA
+    return c
+
+
+def rotulo_classe(c):
+    return f"{c['TIPO'] or '—'}/{c['SERIE'] or '—'}" + ("" if c["no"] == "SUBORD" else " [nó SENIOR]")
+
+
+def escolher_serie_coerente(meses):
+    """meses: {(ano, mes): dados de extrair_mes()}.
+    Devolve (escolhas, diagnosticos, mono_classe), onde
+      escolhas      = {(ano,mes): candidato escolhido}
+      diagnosticos  = {(ano,mes): {"erro": float, "trocou": bool, "alt": str|None}}
+        erro   = descontinuidade residual frente ao mês anterior escolhido
+        trocou = a escolha difere da que o rótulo, isolado, indicaria
+        alt    = rótulo que a regra antiga teria escolhido (quando trocou)
+    """
+    chaves = [k for k in sorted(meses) if meses[k].get("candidatos")]
+    if not chaves:
+        return {}, {}, False
+
+    # Fundo "mono-classe": em nenhum mês os nós SENIOR e SUBORD têm valor ao
+    # mesmo tempo. Nesses fundos há uma única classe de cotas e o nó em que o
+    # administrador a colocou varia (ex.: SUPER RENDA — a mesma posição de
+    # 10.176.737,63 cotas migrou de SENIOR para SUBORD em out/2024).
+    def tem_valor(cs, no):
+        return any(c["no"] == no and (c["qtd"] or c["valor"]) for c in cs)
+
+    mono_classe = not any(tem_valor(meses[k]["candidatos"], "SENIOR")
+                          and tem_valor(meses[k]["candidatos"], "SUBORD")
+                          for k in chaves)
+
+    # ---- Viterbi ----
+    tabela = []          # (chave, candidatos, custo_acumulado, backpointer)
+    custo_ant = cands_ant = chave_ant = None
+    for k in chaves:
+        cs = meses[k]["candidatos"]
+        sub_zerado = not tem_valor(cs, "SUBORD")
+        priors = [_custo_rotulo(c, sub_zerado, mono_classe) for c in cs]
+        if custo_ant is None:
+            custos, back = list(priors), [None] * len(cs)
+        else:
+            gap = (k[0] * 12 + k[1]) - (chave_ant[0] * 12 + chave_ant[1])
+            custos, back = [], []
+            for j, c in enumerate(cs):
+                melhor = arg = None
+                for p, cp in enumerate(cands_ant):
+                    v = custo_ant[p] + PESO_CONTINUIDADE * min(
+                        _erro_continuidade(cp, c, gap), ERRO_MAX)
+                    if melhor is None or v < melhor:
+                        melhor, arg = v, p
+                custos.append(melhor + priors[j])
+                back.append(arg)
+        tabela.append((k, cs, custos, back))
+        custo_ant, cands_ant, chave_ant = custos, cs, k
+
+    # ---- reconstrução do caminho ----
+    idx = min(range(len(tabela[-1][2])), key=lambda j: tabela[-1][2][j])
+    caminho = [None] * len(tabela)
+    for i in range(len(tabela) - 1, -1, -1):
+        caminho[i] = idx
+        if i:
+            idx = tabela[i][3][idx]
+
+    escolhas, diag = {}, {}
+    for i, (k, cs, _c, _b) in enumerate(tabela):
+        esc = cs[caminho[i]]
+        escolhas[k] = esc
+        # erro residual frente ao mês anterior escolhido
+        if i:
+            k_ant = tabela[i - 1][0]
+            gap = (k[0] * 12 + k[1]) - (k_ant[0] * 12 + k_ant[1])
+            erro = _erro_continuidade(escolhas[k_ant], esc, gap)
+        else:
+            erro = 0.0
+        # o que a regra antiga (só rótulo) teria escolhido
+        t_ant, s_ant = escolher_subordinada([c for c in cs if c["no"] == "SUBORD"])
+        trocou = (t_ant, s_ant) != (esc["TIPO"], esc["SERIE"])
+        diag[k] = {"erro": erro, "trocou": trocou,
+                   "alt": (f"{t_ant or '—'}/{s_ant or '—'}" if trocou else None)}
+    return escolhas, diag, mono_classe
+
+
+def parse_informe(xml_bytes):
+    """Compatibilidade: extrai um mês isolado, escolhendo a classe só pelo rótulo.
+    O caminho usado pela interface é extrair_mes() + escolher_serie_coerente()."""
+    d = extrair_mes(xml_bytes)
+    subord = [c for c in d["candidatos"] if c["no"] == "SUBORD"]
+    tipo_sel, serie_sel = escolher_subordinada(subord)
+    d["sub_tipo"], d["sub_serie"] = tipo_sel, serie_sel
+    esc = next((c for c in subord
+                if (c["TIPO"], c["SERIE"]) == (tipo_sel, serie_sel)), None)
+    d["sub_qtd"] = esc["qtd"] if esc else 0.0
+    d["sub_valor"] = esc["valor"] if esc else 0.0
+    d["aporte"] = esc["aporte"] if esc else 0.0
+    d["resgate"] = esc["resgate"] if esc else 0.0
     return d
 
 
@@ -440,7 +682,8 @@ def executar(cfg, log):
     log(f"Colunas de mês na planilha: {len(mapa)} "
         f"({rotulo(min(mapa))} … {rotulo(max(mapa))})", "info")
 
-    resumo = {"preenchidos": [], "sem_informe": [], "ja_preenchidos": [], "falhas": []}
+    resumo = {"preenchidos": [], "sem_informe": [], "ja_preenchidos": [], "falhas": [],
+              "corrigidos": [], "saltos": []}
     updates = {}
 
     meses = sorted(mapa)
@@ -448,28 +691,83 @@ def executar(cfg, log):
         meses = meses[-ultimos:]
     log(f"Janela considerada: {len(meses)} mês(es) "
         f"({rotulo(meses[0])} … {rotulo(meses[-1])})", "info")
-    log("Baixando informes…", "info")
 
+    # ---- 1) baixa TODOS os meses da janela ----------------------------------
+    # A janela inteira é necessária mesmo quando só alguns meses serão
+    # gravados: a identificação da classe subordinada é feita comparando os
+    # meses entre si (ver escolher_serie_coerente), então tirar meses do meio
+    # enfraquece a análise.
+    a_baixar = [k for k in meses if k in informes]
+    for k in meses:
+        if k not in informes:
+            resumo["sem_informe"].append(k)
+    log(f"Baixando {len(a_baixar)} informe(s) para análise de coerência…", "info")
+
+    dados = {}
+    for i, chave in enumerate(a_baixar, 1):
+        try:
+            dados[chave] = extrair_mes(cli.baixar_xml(informes[chave]))
+        except Exception as e:
+            resumo["falhas"].append((chave, str(e)))
+            log(f"  FALHA ao baixar/ler {rotulo(chave)}: {e}", "erro")
+        if i % 6 == 0 or i == len(a_baixar):
+            log(f"  … {i}/{len(a_baixar)}", "info")
+
+    sem_classe = [k for k, d in dados.items() if not d.get("candidatos")]
+    for k in sem_classe:
+        resumo["falhas"].append(
+            (k, "o informe não traz a descrição das classes (formato antigo do FNET)"))
+        log(f"  FALHA {rotulo(k)}: informe sem descrição de classes "
+            "(formato antigo) — nada será gravado neste mês.", "erro")
+        dados.pop(k)
+
+    if not dados:
+        raise RuntimeError("nenhum informe legível na janela escolhida.")
+
+    # ---- 2) identifica a subordinada de forma coerente ----------------------
+    log("Identificando a classe subordinada pela continuidade da série "
+        "(quantidade de cotas, valor da cota, aportes e resgates)…", "info")
+    escolhas, diag, mono = escolher_serie_coerente(dados)
+    if mono:
+        log("  Fundo com classe única: o informe alterna a posição entre os nós "
+            "Sênior e Subordinada — a série foi reconstruída pela continuidade.", "aviso")
+
+    # ---- 3) grava --------------------------------------------------------
     for chave in meses:
-        col = mapa[chave]
-        if chave not in informes:
-            resumo["sem_informe"].append(chave)
+        if chave not in escolhas:
             continue
+        col = mapa[chave]
         if not sobrescrever and not vazio[chave]:
             resumo["ja_preenchidos"].append(chave)
             continue
-        try:
-            d = parse_informe(cli.baixar_xml(informes[chave]))
-            for linha, campo in LINHAS_DADOS.items():
-                updates[f"{col}{linha}"] = ("n", d[campo])
-            if sobrescrever or celula_vazia(ws, col, 41):
-                updates[f"{col}41"] = ("f", f"{col}38-{col}43")
-            resumo["preenchidos"].append(chave)
-            log(f"  OK  {rotulo(chave):>8}  (col {col})  PL={d['pl']:,.2f}  "
-                f"sub={d['sub_tipo']}/{d['sub_serie']}", "ok")
-        except Exception as e:
-            resumo["falhas"].append((chave, str(e)))
-            log(f"  FALHA {rotulo(chave)}: {e}", "erro")
+        d, c, dg = dados[chave], escolhas[chave], diag[chave]
+        campos = dict(d, sub_qtd=c["qtd"], sub_valor=c["valor"],
+                      aporte=c["aporte"], resgate=c["resgate"])
+        for linha, campo in LINHAS_DADOS.items():
+            updates[f"{col}{linha}"] = ("n", campos[campo])
+        if sobrescrever or celula_vazia(ws, col, 41):
+            updates[f"{col}41"] = ("f", f"{col}38-{col}43")
+        resumo["preenchidos"].append(chave)
+
+        extra = ""
+        if dg["trocou"]:
+            resumo["corrigidos"].append((chave, rotulo_classe(c), dg["alt"]))
+            extra += f"  [corrigido: pelo rótulo seria {dg['alt']}]"
+        if dg["erro"] > ERRO_ALERTA:
+            resumo["saltos"].append((chave, dg["erro"]))
+            extra += f"  [SALTO sem justificativa de aporte/resgate: {dg['erro']:.0%}]"
+        log(f"  OK  {rotulo(chave):>8}  (col {col})  PL={d['pl']:,.2f}  "
+            f"cotas={c['qtd']:,.4f}  valor={c['valor']:,.4f}  "
+            f"sub={rotulo_classe(c)}{extra}",
+            "aviso" if dg["erro"] > ERRO_ALERTA else "ok")
+
+    if resumo["corrigidos"]:
+        log(f"{len(resumo['corrigidos'])} mês(es) em que a classe do rótulo NÃO era a "
+            "subordinada real (mezanino/sênior rotulado como subordinada) — "
+            "corrigido pela continuidade da série.", "destaque")
+    if resumo["saltos"]:
+        log(f"{len(resumo['saltos'])} mês(es) com variação brusca que nem aporte nem "
+            "resgate explicam — confira esses meses no FNET.", "aviso")
 
     if updates:
         if backup:
@@ -491,6 +789,10 @@ def executar(cfg, log):
         "ja_preenchidos": [rotulo(k) for k in sorted(resumo["ja_preenchidos"])],
         "sem_informe": [rotulo(k) for k in sorted(resumo["sem_informe"])],
         "falhas": [f"{rotulo(k)}: {msg}" for k, msg in resumo["falhas"]],
+        "corrigidos": [f"{rotulo(k)}: usou {novo} (o rótulo indicaria {velho})"
+                       for k, novo, velho in sorted(resumo["corrigidos"])],
+        "saltos": [f"{rotulo(k)}: variação de {e:.0%} sem aporte/resgate que a explique"
+                   for k, e in sorted(resumo["saltos"])],
     }
     return resumo_txt
 
@@ -715,6 +1017,16 @@ PAGINA_HTML = r"""<!doctype html>
       addLine("Preenchidos agora (" + r.preenchidos.length + "): " + (r.preenchidos.join(", ") || "—"), "ok");
       if(r.ja_preenchidos.length) addLine("Já preenchidos (" + r.ja_preenchidos.length + "): " + r.ja_preenchidos.join(", "), "info");
       if(r.sem_informe.length) addLine("Sem informe no FNET (" + r.sem_informe.length + "): " + r.sem_informe.join(", "), "aviso");
+      if(r.corrigidos && r.corrigidos.length){
+        addLine("", "info");
+        addLine("Classe corrigida pela continuidade da série (" + r.corrigidos.length + "):", "destaque");
+        r.corrigidos.forEach(f => addLine("  " + f, "destaque"));
+      }
+      if(r.saltos && r.saltos.length){
+        addLine("", "info");
+        addLine("Conferir manualmente — variação brusca sem justificativa (" + r.saltos.length + "):", "aviso");
+        r.saltos.forEach(f => addLine("  " + f, "aviso"));
+      }
       if(r.falhas.length){ addLine("Falhas (" + r.falhas.length + "):", "erro"); r.falhas.forEach(f => addLine("  " + f, "erro")); }
       addLine("", "info");
       addLine("Abra a planilha no Excel — as fórmulas recalculam automaticamente ao abrir.", "destaque");
@@ -842,7 +1154,8 @@ def main():
     print("   endereço acima no navegador.)")
     print("  Para encerrar: feche esta janela ou pressione Ctrl+C.")
     print("=" * 60)
-    threading.Timer(0.8, lambda: webbrowser.open(endereco)).start()
+    if not os.environ.get("NETZ_HUB"):
+        threading.Timer(0.8, lambda: webbrowser.open(endereco)).start()
     try:
         servidor.serve_forever()
     except KeyboardInterrupt:
