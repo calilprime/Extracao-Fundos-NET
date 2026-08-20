@@ -1143,7 +1143,10 @@ def achar_porta(inicio=8765, fim=8815):
 
 
 def main():
-    porta = achar_porta()
+    #  Rodando sob o hub, quem escolhe a porta é ele: duas ferramentas subindo
+    #  juntas sorteavam a mesma porta livre, e no Windows as duas conseguem
+    #  ligar no mesmo endereço.
+    porta = int(os.environ.get("NETZ_PORTA") or 0) or achar_porta()
     endereco = f"http://127.0.0.1:{porta}"
     servidor = ThreadingHTTPServer(("127.0.0.1", porta), Handler)
     print("=" * 60)
